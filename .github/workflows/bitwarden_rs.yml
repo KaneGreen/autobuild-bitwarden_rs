@@ -1,0 +1,75 @@
+name: bitwarden_rs
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-cross:
+    runs-on: ubuntu-20.04
+    env:
+      RUST_BACKTRACE: full
+    strategy:
+      matrix:
+        target:
+          - aarch64-unknown-linux-musl
+          - x86_64-unknown-linux-musl
+
+    steps:
+      - name: Install tools
+        run: |
+          sudo -E apt-get update
+          sudo -E apt-get install -y jq
+
+      - name: Checkout Repo
+        run: |
+          rm -rf ./git
+          git clone --depth=1 -b async https://github.com/dani-garcia/bitwarden_rs.git ./
+
+      - name: Apply Patch
+        run: |
+          echo '' >> Cargo.toml
+          echo '[profile.release]' >> Cargo.toml
+          echo 'lto = "fat"' >> Cargo.toml
+          echo 'codegen-units = 1' >> Cargo.toml
+          echo 'incremental = false' >> Cargo.toml
+          echo 'panic = "abort"' >> Cargo.toml
+
+      - name: Install Cross
+        run: cargo install cross
+
+      - name: Build ${{ matrix.target }}
+        timeout-minutes: 120
+        run: |
+          rm -f Cargo.lock
+          cross build --target "${{ matrix.target }}" --features "sqlite vendored_openssl" --release
+          cd target/
+          mkdir prepare upload 
+          cd "${{ matrix.target }}/release/"
+          cp bitwarden_rs ../../prepare/
+          cp ../../../Cargo.lock ../../prepare/
+          cd ../../prepare/
+          mkdir data
+          curl --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/dani-garcia/bitwarden_rs/master/.env.template -o .env
+          export MYLATESTRELEASE=$(curl -sSf -H 'Accept: application/vnd.github.v3+json' https://api.github.com/repos/dani-garcia/bw_web_builds/tags | jq '.[].name' | head -n 1)
+          export MYLATESTRELEASE=${MYLATESTRELEASE:1:-1}
+          wget --https-only https://github.com/dani-garcia/bw_web_builds/releases/download/${MYLATESTRELEASE}/bw_web_${MYLATESTRELEASE}.tar.gz
+          tar xf bw_web_${MYLATESTRELEASE}.tar.gz
+          rm  -f bw_web_${MYLATESTRELEASE}.tar.gz
+          tar cJf ../upload/bitwarden_rs_${{ matrix.target }}_async.tar.xz .env *
+          
+      - name: Hashing
+        run:
+          cd target/upload/
+          sha256sum bitwarden_rs* | tee bitwarden_rs_${{ matrix.target }}_async.tar.xz.sha256
+
+      - name: Upload Binaries to Release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.MY_PERSONAL_ACCESS_TOKEN }}
+          file: target/upload/*
+          tag: ${{ github.ref }}
+          file_glob: true
