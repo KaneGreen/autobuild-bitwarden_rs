@@ -38,6 +38,11 @@ jobs:
           echo 'incremental = false' >> Cargo.toml
           echo 'panic = "abort"' >> Cargo.toml
 
+      - name: Update Rustc
+        run: |
+          rustup self update
+          rustup update
+
       - name: Install Cross
         run: cargo install cross
 
